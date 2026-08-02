@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "outcometrace"
+version = "0.1.0"
+description = "Outcome-first evaluation and reliability testing for tool-using AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Raam Nandhakumar" }
+]
+keywords = ["ai-agents", "evaluation", "reliability", "llm", "testing"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = []
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.77.0"]
+dev = ["pytest>=8.3", "ruff>=0.9"]
+
+[project.scripts]
+outcometrace = "outcometrace.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/outcometrace"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
