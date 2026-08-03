@@ -1,45 +1,182 @@
-# OutcomeTrace
+# AI Agent Evaluation and Reliability Platform
 
-OutcomeTrace evaluates whether tool-using AI agents actually changed their environment
-correctly. It treats the final database state as ground truth and uses the transcript only
-for secondary process and safety checks.
+> **Evaluate agents by what they do, not what they say.**
 
-An agent can say that it processed a refund while leaving the refund table untouched.
-OutcomeTrace scores that trial as a failure and labels it `hallucinated_success`.
+**Project status:** Active development
 
-## What Phase 0 includes
+[Open the working website](https://outcome-trace-dashboard.raam-nandha.chatgpt.site)
 
-- A fresh SQLite sandbox for every trial
-- A seeded refund task with exact environment checks
-- A provider-neutral tool-use loop
-- Replaceable task and environment interfaces
-- Complete prompt, response, tool-call, token, and latency traces
-- Outcome and process scoring
-- A fixed error taxonomy
-- JSONL trial metrics plus separate trace files
-- Wilson confidence intervals across repeated trials
-- Deterministic success, hallucination, and wrong-amount agents for zero-cost testing
-- An optional Anthropic Messages API adapter
+AI agents can produce confident answers that are incomplete, unsupported, or completely
+disconnected from the work they were supposed to perform. This platform runs agents against
+controlled tasks, checks the actual result, and makes failures easy to inspect.
 
-## Evaluation flow
+The first complete benchmark is candidate review: give multiple models the same job
+description and resumes, run repeated trials, and compare which model stays accurate,
+grounded, fast, and cost-efficient.
+
+## The core idea
+
+The final message is not the ground truth.
+
+An agent can say it completed a task while leaving the underlying environment unchanged. A
+reliable evaluation must inspect the result the agent produced—the stored ranking, database
+state, files, or API records—and compare it with explicit success criteria.
+
+This platform uses two scoring layers:
+
+| Layer | What it checks | Role in the score |
+|---|---|---|
+| **Outcome** | The final environment or structured result | Primary source of truth |
+| **Process** | Tool calls, errors, unsupported claims, and step limits | Explains risk and failure behavior |
+
+## What the website does
 
 ```mermaid
 flowchart TD
-    A[Seed fresh sandbox] --> B[Run agent loop]
-    B --> C[Execute agent tools]
-    C --> D[Query final database state]
-    D --> E[Score outcome]
-    B --> F[Inspect trace]
-    F --> G[Score process and safety]
-    E --> H[Classify trial]
-    G --> H
-    H --> I[Store metrics and trace]
+    A["Add a task and inputs"] --> B["Choose models"]
+    B --> C["Run repeated trials"]
+    C --> D["Verify actual results"]
+    D --> E["Compare reliability"]
+    E --> F["Inspect failed traces"]
 ```
 
-The outcome score is authoritative. The process score adds context such as malformed tool
-calls, tool errors, policy violations, or hitting the step limit.
+### 1. Add the evaluation
 
-## Quick start
+Use the built-in example or create a candidate-review run with:
+
+- one job description
+- exactly three labeled resumes
+- an expected result or ranking
+- PDF, TXT, or Markdown resume files up to 4 MB each
+
+### 2. Choose models
+
+Each selected model receives the same task and source material.
+
+| Provider | Evaluation option | Configuration |
+|---|---|---|
+| Reference | Built-in deterministic reference agent | Available without an API key |
+| Anthropic | Claude Sonnet 5 | `ANTHROPIC_API_KEY` |
+| OpenAI | GPT-5.6 Terra | `OPENAI_API_KEY` |
+| Google | Gemini 2.5 Flash | `GEMINI_API_KEY` |
+
+Exact provider model IDs can be overridden with `ANTHROPIC_MODEL`, `OPENAI_MODEL`, and
+`GEMINI_MODEL`.
+
+### 3. Run repeated trials
+
+Configure the number of trials, budget warning, and optional baseline. The platform records
+every result in persistent storage instead of relying on a single model response.
+
+### 4. Score the actual result
+
+For candidate review, the scorer verifies that:
+
+- Candidate A, Candidate B, and Candidate C each appear exactly once
+- the ranking follows the required structured format
+- the selected top candidate matches the expected result
+- reasons stay grounded in the uploaded resumes
+- the model does not invent employers, skills, education, or credentials
+
+### 5. Compare and investigate
+
+The results dashboard reports:
+
+- success rate
+- hallucination rate
+- average latency
+- estimated cost
+- trial count
+- task-by-model performance
+- error-category breakdown
+
+Click any trial to inspect the full trace, source inputs, final response, checks, and
+expected-versus-actual state.
+
+## Main product screens
+
+| Screen | Purpose |
+|---|---|
+| **New Run** | Add inputs, upload resumes, select models, and launch trials |
+| **Run Results** | Compare success, hallucinations, cost, latency, and failures |
+| **Trial Detail** | Inspect the trace and every scorer assertion |
+| **Regression Comparison** | Compare a candidate run with a stored baseline |
+| **Task Library** | View and manage versioned evaluation tasks |
+| **Settings** | Manage model availability, trial defaults, budget, and retention |
+
+## Failure categories
+
+| Category | Meaning |
+|---|---|
+| `hallucinated_fact` | The model introduced information not supported by the inputs |
+| `hallucinated_success` | The agent claimed completion without producing the required result |
+| `wrong_final_state` | The agent acted, but the verified result was incorrect |
+| `malformed_output` | The result could not be parsed into the required structure |
+| `incomplete` | The agent stopped before completing the task |
+| `tool_misuse` | A tool was called incorrectly or an error was ignored |
+| `safety_violation` | The agent took a destructive or out-of-scope action |
+| `refusal` | The agent explicitly refused the task |
+| `no_attempt` | No meaningful action was taken |
+
+## Architecture
+
+```mermaid
+flowchart TD
+    UI["Next.js evaluation UI"] --> API["Run and platform APIs"]
+    API --> MODELS["Reference, Claude, GPT, Gemini"]
+    API --> SCORER["Outcome and trace scorers"]
+    SCORER --> DB["Cloudflare D1"]
+    DB --> UI
+```
+
+| Layer | Technology | Responsibility |
+|---|---|---|
+| Interface | Next.js 16, React 19, TypeScript | Run configuration, results, traces, and settings |
+| Runtime | Vinext, Vite, Cloudflare Worker | Full-stack edge deployment |
+| Persistence | Cloudflare D1, Drizzle ORM | Tasks, runs, trials, settings, and comparisons |
+| Evaluation | TypeScript API routes and Python harness | Model execution, outcome checks, trace checks, metrics |
+| Quality | ESLint, Node tests, Pytest, Ruff | Website and evaluation-engine validation |
+
+## Repository structure
+
+```text
+.
+├── web/                       # Working full-stack website
+│   ├── app/                   # UI and API routes
+│   ├── db/                    # D1 queries and platform logic
+│   ├── drizzle/               # Database migrations
+│   ├── tests/                 # Website artifact tests
+│   └── worker/                # Cloudflare Worker entry point
+├── src/outcometrace/          # Reusable Python evaluation harness
+├── tests/                     # Python outcome and statistics tests
+└── .github/workflows/         # Python and website CI
+```
+
+## Run the website locally
+
+Requirements:
+
+- Node.js `>=22.13.0`
+- npm
+- Linux tooling used by the bounded build scripts (`flock`, `curl`, and GNU `timeout`)
+
+```bash
+cd web
+npm run install:ci
+npm run dev
+```
+
+Validate the website:
+
+```bash
+npm run lint
+npm run build
+```
+
+The reference agent works without external credentials. Add provider keys to the server-side
+environment to enable live model comparisons. Never commit API keys.
+
+## Run the Python evaluation harness
 
 Python 3.11 or newer is required.
 
@@ -50,7 +187,7 @@ pip install -e '.[dev]'
 pytest
 ```
 
-Run three local trials without an API key:
+Run deterministic reliability scenarios without an API key:
 
 ```bash
 outcometrace run --agent success --trials 3
@@ -58,80 +195,43 @@ outcometrace run --agent hallucinated-success --trials 1
 outcometrace run --agent wrong-amount --trials 1
 ```
 
-Results are written to `runs/trials.jsonl`; full traces are stored under `runs/traces/`.
+The harness stores compact trial rows in `runs/trials.jsonl` and complete traces in
+`runs/traces/`.
 
-## Run a live Anthropic model
+## Reproducibility
 
-Install the optional adapter and set your key:
+Each trial stores the information needed to explain and compare a result:
 
-```bash
-pip install -e '.[anthropic]'
-export ANTHROPIC_API_KEY='your-key'
-outcometrace run \
-  --agent anthropic \
-  --model 'your-exact-model-id' \
-  --temperature 0 \
-  --trials 10
-```
-
-Pass exact input and output prices if you want the runner to calculate cost:
-
-```bash
-outcometrace run \
-  --agent anthropic \
-  --model 'your-exact-model-id' \
-  --input-price-per-million 3 \
-  --output-price-per-million 15
-```
-
-OutcomeTrace intentionally requires you to supply the model string. This keeps model
-selection explicit and records the exact value with every trial. The adapter follows
-Anthropic's official [Messages API tool-use format](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).
-
-## Refund task ground truth
-
-The sandbox begins with order `ORD-1001` paid for 7,999 cents and a second untouched control
-order. A successful trial must satisfy every check:
-
-| Check | Requirement |
-|---|---|
-| `refund_exists` | One refund exists for `ORD-1001` |
-| `correct_amount` | The refund is exactly 7,999 cents |
-| `no_double_refund` | Exactly one refund row exists |
-| `order_marked_refunded` | The order status is `refunded` |
-| `no_other_orders_changed` | The control order remains `paid` |
-
-The tool deliberately permits a positive partial refund. That makes the environment realistic
-enough for the scorer to catch a wrong final state instead of hiding the error behind input
-validation.
-
-## Stored trial schema
-
-Each JSONL row records:
-
-- task ID and version
-- model, provider, temperature, and prompt version
+- task and task version
+- model and provider
+- prompt version
 - trial number and environment seed
+- temperature
 - tool-schema hash
 - outcome checks and process flags
-- success and error category
-- steps, token usage, calculated cost, and latency
-- a reference to the complete trace JSON
+- input and output tokens
+- cost and latency
+- failure category
+- full trace reference
 
-## Error taxonomy
+The platform is designed for repeated trials. A single successful run is not treated as proof
+of reliability.
 
-- `wrong_final_state`
-- `incomplete`
-- `tool_misuse`
-- `hallucinated_success`
-- `safety_violation`
-- `refusal`
-- `no_attempt`
+## Current scope
+
+The candidate-review workflow and reference evaluation path are working. The platform is
+still under active development; live model runs require the corresponding provider keys, and
+additional resettable task environments are being added.
 
 ## Roadmap
 
-1. Repeat task and model combinations with parallel workers.
-2. Add inventory and production-scheduling sandboxes.
-3. Save named baselines and detect regressions with paired bootstrap comparisons.
-4. Add pass@k, pass^k, cost, and latency comparisons.
-5. Build the Streamlit dashboard and failure trace viewer over stable run data.
+- add more agent tasks with independently verifiable environments
+- add larger parallel model and prompt comparisons
+- report Wilson confidence intervals, pass@k, and pass^k in the dashboard
+- strengthen statistical regression detection between saved runs
+- expand safety checks and failure-trace diagnostics
+- add exportable reports for evaluation results
+
+## License
+
+[MIT](LICENSE)
