@@ -14,6 +14,19 @@ The first complete benchmark is candidate review: give multiple models the same 
 description and resumes, run repeated trials, and compare which model stays accurate,
 grounded, fast, and cost-efficient.
 
+## Field origin and customer discovery
+
+OutcomeTrace is informed by two paid operational pilots with small food manufacturers. The
+pilots used Excel, Google Sheets, Python-assisted analysis, and manually managed workflows;
+they were not production software deployments.
+
+The customers initially asked for better inventory and production tracking. Discovery showed
+that the more urgent problem was deciding what to produce first so dispatch would not fail.
+That shift—from the stated request to the binding operational constraint—shaped the platform's
+outcome-first approach.
+
+[Read the customer pilot case study](docs/customer-pilot.md)
+
 ## The core idea
 
 The final message is not the ground truth.
