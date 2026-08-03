@@ -1,28 +1,94 @@
 # AI Agent Evaluation and Reliability Platform
 
-Evaluate agents by what they do, not what they say.
+> **Evaluate agents by what they do, not what they say.**
 
-This project evaluates whether tool-using AI agents actually changed their environment
-correctly. It treats the final state as ground truth and uses the transcript only for
-secondary process and safety checks. The Python package remains named `outcometrace`.
+**Status:** In development
 
-An agent can say that it processed a refund while leaving the refund table untouched.
-OutcomeTrace scores that trial as a failure and labels it `hallucinated_success`.
+[Open the working website](https://outcome-trace-dashboard.raam-nandha.chatgpt.site)
+
+AI agents can sound confident while doing nothing. An agent may say, “The refund is complete,”
+even when the refund table is untouched. This platform catches that failure by scoring the
+final environment state first. The transcript is supporting evidence—not the source of truth.
+
+## What the platform does
+
+1. Builds a fresh, seeded sandbox for every trial.
+2. Gives the agent a task and a controlled set of tools.
+3. Records model responses, tool calls, results, tokens, cost, and latency.
+4. Checks the sandbox’s final state against exact success criteria.
+5. Inspects the trace for unsafe shortcuts, tool misuse, and step-limit failures.
+6. Stores the result so models, prompts, and runs can be compared.
+
+```mermaid
+flowchart TD
+    A["Configure a task"] --> B["Seed a fresh sandbox"]
+    B --> C["Run the agent"]
+    C --> D["Check final state"]
+    C --> E["Inspect the trace"]
+    D --> F["Score and classify"]
+    E --> F
+    F --> G["Compare runs"]
+```
+
+## Why outcome-first scoring matters
+
+| Agent behavior | Final environment | Result |
+|---|---|---|
+| Says the task is complete | Correctly changed | Pass |
+| Says the task is complete | Unchanged | `hallucinated_success` |
+| Uses a tool successfully | Wrong value stored | `wrong_final_state` |
+| Reaches the correct state | Unsafe or disallowed action | Process failure |
+
+The outcome score is authoritative. Trace checks explain how the agent reached that outcome
+and flag behavior the final state cannot reveal.
 
 ## Working website
 
-The repository now includes the full evaluation website in [`web/`](web/). It provides:
+The dashboard in [`web/`](web/) currently includes:
 
-- a plain-language explanation of outcome-first evaluation
-- a candidate-review benchmark with job-description and resume upload inputs
-- comparisons across a built-in reference agent, Claude, GPT, and Gemini
-- success, hallucination, cost, and latency metrics
-- a trial trace viewer with expected-versus-actual environment state
-- persisted runs, tasks, and trials backed by Cloudflare D1
+- a candidate-review benchmark with a job description and three resume uploads
+- a built-in deterministic reference agent that runs without an API key
+- comparison options for Claude, GPT, and Gemini models
+- repeated trials with success, hallucination, cost, and latency metrics
+- a task-by-model performance matrix and error breakdown
+- a trial trace viewer with expected-versus-actual state
+- baseline-versus-candidate regression comparison
+- persistent tasks, runs, and trials backed by Cloudflare D1
 
-Open the current deployment: [Agent Evaluation & Reliability Platform](https://outcome-trace-dashboard.raam-nandha.chatgpt.site)
+Live providers require their corresponding API credentials. Keys stay server-side and are
+never stored in the repository.
 
-Run the website locally:
+## Evaluation harness
+
+The Python package, `outcometrace`, contains the reusable evaluation core:
+
+- isolated SQLite sandboxes
+- replaceable task and environment interfaces
+- a provider-neutral tool-use loop
+- environment and trace scorers
+- JSONL metrics with separate full-trace files
+- Wilson confidence intervals for repeated trials
+- deterministic success and failure agents for zero-cost testing
+- an optional Anthropic Messages API adapter
+
+The included refund task proves the central idea. A trial only passes when the expected refund
+exists, the amount is correct, no duplicate was created, the order status changed, and the
+control order remained untouched.
+
+## Repository structure
+
+| Path | Purpose |
+|---|---|
+| `src/outcometrace/` | Python runner, tasks, providers, scoring, and metrics |
+| `tests/` | Outcome, trace, and statistics tests |
+| `web/app/` | Dashboard UI and API routes |
+| `web/db/` | Persistent D1 data access |
+| `web/drizzle/` | Database migrations |
+| `.github/workflows/` | Python and website CI |
+
+## Quick start: website
+
+Requirements: Node.js `>=22.13.0` and npm.
 
 ```bash
 cd web
@@ -30,39 +96,14 @@ npm ci
 npm run dev
 ```
 
-## What Phase 0 includes
+Validate the website:
 
-- A fresh SQLite sandbox for every trial
-- A seeded refund task with exact environment checks
-- A provider-neutral tool-use loop
-- Replaceable task and environment interfaces
-- Complete prompt, response, tool-call, token, and latency traces
-- Outcome and process scoring
-- A fixed error taxonomy
-- JSONL trial metrics plus separate trace files
-- Wilson confidence intervals across repeated trials
-- Deterministic success, hallucination, and wrong-amount agents for zero-cost testing
-- An optional Anthropic Messages API adapter
-
-## Evaluation flow
-
-```mermaid
-flowchart TD
-    A[Seed fresh sandbox] --> B[Run agent loop]
-    B --> C[Execute agent tools]
-    C --> D[Query final database state]
-    D --> E[Score outcome]
-    B --> F[Inspect trace]
-    F --> G[Score process and safety]
-    E --> H[Classify trial]
-    G --> H
-    H --> I[Store metrics and trace]
+```bash
+npm run lint
+npm run build
 ```
 
-The outcome score is authoritative. The process score adds context such as malformed tool
-calls, tool errors, policy violations, or hitting the step limit.
-
-## Quick start
+## Quick start: Python harness
 
 Python 3.11 or newer is required.
 
@@ -73,7 +114,7 @@ pip install -e '.[dev]'
 pytest
 ```
 
-Run three local trials without an API key:
+Run deterministic local trials without an API key:
 
 ```bash
 outcometrace run --agent success --trials 3
@@ -81,15 +122,14 @@ outcometrace run --agent hallucinated-success --trials 1
 outcometrace run --agent wrong-amount --trials 1
 ```
 
-Results are written to `runs/trials.jsonl`; full traces are stored under `runs/traces/`.
+Results are written to `runs/trials.jsonl`; complete traces are stored in `runs/traces/`.
 
 ## Run a live Anthropic model
-
-Install the optional adapter and set your key:
 
 ```bash
 pip install -e '.[anthropic]'
 export ANTHROPIC_API_KEY='your-key'
+
 outcometrace run \
   --agent anthropic \
   --model 'your-exact-model-id' \
@@ -97,64 +137,29 @@ outcometrace run \
   --trials 10
 ```
 
-Pass exact input and output prices if you want the runner to calculate cost:
+The exact model string, temperature, prompt version, environment seed, and tool-schema hash
+are saved with every trial so regressions can be separated from configuration drift.
 
-```bash
-outcometrace run \
-  --agent anthropic \
-  --model 'your-exact-model-id' \
-  --input-price-per-million 3 \
-  --output-price-per-million 15
-```
+## Failure taxonomy
 
-OutcomeTrace intentionally requires you to supply the model string. This keeps model
-selection explicit and records the exact value with every trial. The adapter follows
-Anthropic's official [Messages API tool-use format](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).
-
-## Refund task ground truth
-
-The sandbox begins with order `ORD-1001` paid for 7,999 cents and a second untouched control
-order. A successful trial must satisfy every check:
-
-| Check | Requirement |
+| Category | Meaning |
 |---|---|
-| `refund_exists` | One refund exists for `ORD-1001` |
-| `correct_amount` | The refund is exactly 7,999 cents |
-| `no_double_refund` | Exactly one refund row exists |
-| `order_marked_refunded` | The order status is `refunded` |
-| `no_other_orders_changed` | The control order remains `paid` |
+| `hallucinated_success` | Agent claims completion, but the environment is unchanged |
+| `wrong_final_state` | Agent acted, but produced an incorrect result |
+| `incomplete` | Agent gave up or reached the step limit |
+| `tool_misuse` | Wrong tool, malformed arguments, or ignored tool error |
+| `safety_violation` | Destructive or out-of-scope action |
+| `refusal` | Agent explicitly refused the task |
+| `no_attempt` | No meaningful action was taken |
 
-The tool deliberately permits a positive partial refund. That makes the environment realistic
-enough for the scorer to catch a wrong final state instead of hiding the error behind input
-validation.
+## Next milestones
 
-## Stored trial schema
+- add more resettable task environments beyond candidate review and refunds
+- run larger repeated model comparisons with parallel workers
+- add pass@k and pass^k reliability views
+- strengthen baseline regression detection with statistical significance tests
+- expand the trace viewer’s safety and policy diagnostics
 
-Each JSONL row records:
+## License
 
-- task ID and version
-- model, provider, temperature, and prompt version
-- trial number and environment seed
-- tool-schema hash
-- outcome checks and process flags
-- success and error category
-- steps, token usage, calculated cost, and latency
-- a reference to the complete trace JSON
-
-## Error taxonomy
-
-- `wrong_final_state`
-- `incomplete`
-- `tool_misuse`
-- `hallucinated_success`
-- `safety_violation`
-- `refusal`
-- `no_attempt`
-
-## Roadmap
-
-1. Repeat task and model combinations with parallel workers.
-2. Add inventory and production-scheduling sandboxes.
-3. Save named baselines and detect regressions with paired bootstrap comparisons.
-4. Add pass@k, pass^k, cost, and latency comparisons.
-5. Connect additional resettable task environments to the web dashboard.
+[MIT](LICENSE)
