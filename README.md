@@ -1,11 +1,34 @@
-# OutcomeTrace
+# AI Agent Evaluation and Reliability Platform
 
-OutcomeTrace evaluates whether tool-using AI agents actually changed their environment
-correctly. It treats the final database state as ground truth and uses the transcript only
-for secondary process and safety checks.
+Evaluate agents by what they do, not what they say.
+
+This project evaluates whether tool-using AI agents actually changed their environment
+correctly. It treats the final state as ground truth and uses the transcript only for
+secondary process and safety checks. The Python package remains named `outcometrace`.
 
 An agent can say that it processed a refund while leaving the refund table untouched.
 OutcomeTrace scores that trial as a failure and labels it `hallucinated_success`.
+
+## Working website
+
+The repository now includes the full evaluation website in [`web/`](web/). It provides:
+
+- a plain-language explanation of outcome-first evaluation
+- a candidate-review benchmark with job-description and resume upload inputs
+- comparisons across a built-in reference agent, Claude, GPT, and Gemini
+- success, hallucination, cost, and latency metrics
+- a trial trace viewer with expected-versus-actual environment state
+- persisted runs, tasks, and trials backed by Cloudflare D1
+
+Open the current deployment: [Agent Evaluation & Reliability Platform](https://outcome-trace-dashboard.raam-nandha.chatgpt.site)
+
+Run the website locally:
+
+```bash
+cd web
+npm ci
+npm run dev
+```
 
 ## What Phase 0 includes
 
@@ -134,4 +157,4 @@ Each JSONL row records:
 2. Add inventory and production-scheduling sandboxes.
 3. Save named baselines and detect regressions with paired bootstrap comparisons.
 4. Add pass@k, pass^k, cost, and latency comparisons.
-5. Build the Streamlit dashboard and failure trace viewer over stable run data.
+5. Connect additional resettable task environments to the web dashboard.
