@@ -483,7 +483,7 @@ function TaskLibrary({ tasks, saveTask }: { tasks: Task[]; saveTask: (body: Reco
 
           <article className="panel fixture-preview">
             <PanelTitle title="Initial-state preview" detail="What every trial receives before the agent starts" />
-            <div className="fixture-stats"><div><span>Tools</span><strong>{toolsText.split("\n").filter(Boolean).length}</strong></div><div><span>Assertions</span><strong>{assertionsText.split("\n").filter(Boolean).length}</strong></div><div><span>Storage</span><strong className="green-text">D1</strong></div></div>
+            <div className="fixture-stats"><div><span>Tools</span><strong>{toolsText.split("\n").filter(Boolean).length}</strong></div><div><span>Assertions</span><strong>{assertionsText.split("\n").filter(Boolean).length}</strong></div><div><span>Storage</span><strong className="green-text">Demo</strong></div></div>
             <pre>{fixtureText}</pre>
           </article>
         </div>
@@ -731,7 +731,7 @@ function Settings({ providers, settings, saveSettings }: { providers: PlatformDa
             <ProviderRow provider="OpenAI" detail="GPT-5.6 Terra" status={providers.openai ? "Connected" : "Key required"} connected={providers.openai} />
             <ProviderRow provider="Google" detail="Gemini 2.5 Flash" status={providers.gemini ? "Connected" : "Key required"} connected={providers.gemini} />
             <ProviderRow provider="Reference" detail="OutcomeTrace Reference Agent" status="Connected" connected />
-          </div><div className="secret-note"><strong>Secure key setup</strong><p>Add provider keys as encrypted environment variables in the Site settings. Do not paste keys into this dashboard or chat.</p></div></article>
+          </div><div className="secret-note"><strong>Secure key setup</strong><p>Add provider keys as encrypted environment variables in Vercel project settings. Do not paste keys into this dashboard or chat.</p></div></article>
           <article className="panel settings-section"><div className="settings-head"><div><h2>Model registry</h2><p>The reference agent works now. Live models become selectable when their server key exists.</p></div></div><div className="registry-list">{[
             { name: "OutcomeTrace Reference Agent", id: "outcometrace/reference-v1", available: true },
             { name: "Claude Sonnet 5", id: "anthropic/claude-sonnet-5", available: providers.anthropic },

@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
-import { buildReferenceTrial, getPlatformDb, initializePlatform, parseJson, trialInsert } from "../../../db/platform";
+import {
+  buildReferenceTrial,
+  getPlatformStore,
+  latestTaskRows,
+  parseJson,
+  saveCompletedRun,
+  saveTaskVersion,
+  saveWorkspaceSettings,
+} from "../../../db/platform";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 function taskRow(row: Record<string, unknown>) {
   return {
@@ -364,30 +372,26 @@ async function runCustomTrial(custom: CustomInput, runId: string, index: number,
 }
 
 async function snapshot() {
-  const db = await getPlatformDb();
-  await initializePlatform(db);
-  const [tasksResult, runsResult, settings, latestRun] = await Promise.all([
-    db.prepare(`SELECT t.* FROM tasks t
-      JOIN (SELECT task_key, MAX(version) AS version FROM tasks GROUP BY task_key) latest
-      ON latest.task_key = t.task_key AND latest.version = t.version
-      ORDER BY t.name`).all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM runs ORDER BY created_at DESC LIMIT 20").all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM workspace_settings WHERE id = 'default'").first<Record<string, unknown>>(),
-    db.prepare("SELECT id FROM runs ORDER BY created_at DESC LIMIT 1").first<{ id: string }>(),
-  ]);
-  const recentRuns = runsResult.results.slice(0, 2);
-  const trialsResult = latestRun
-    ? await db.prepare("SELECT * FROM trials WHERE run_id = ? ORDER BY created_at DESC").bind(latestRun.id).all<Record<string, unknown>>()
-    : { results: [] as Record<string, unknown>[] };
-  const comparisonTrials = recentRuns.length
-    ? await db.prepare(`SELECT * FROM trials WHERE run_id IN (${recentRuns.map(() => "?").join(",")}) ORDER BY created_at DESC`)
-        .bind(...recentRuns.map((run) => String(run.id))).all<Record<string, unknown>>()
-    : { results: [] as Record<string, unknown>[] };
+  const store = getPlatformStore();
+  const tasks = latestTaskRows(store);
+  const runs = [...store.runs]
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+    .slice(0, 20);
+  const recentRunIds = new Set(runs.slice(0, 2).map((run) => String(run.id)));
+  const latestRunId = runs.length ? String(runs[0].id) : null;
+  const trials = latestRunId
+    ? store.trials.filter((trial) => trial.run_id === latestRunId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+    : [];
+  const comparisonTrials = store.trials
+    .filter((trial) => recentRunIds.has(String(trial.run_id)))
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+  const settings = store.settings;
   return {
-    tasks: tasksResult.results.map(taskRow),
-    runs: runsResult.results.map(runRow),
-    trials: trialsResult.results.map(trialRow),
-    comparisonTrials: comparisonTrials.results.map(trialRow),
+    tasks: tasks.map(taskRow),
+    runs: runs.map(runRow),
+    trials: trials.map(trialRow),
+    comparisonTrials: comparisonTrials.map(trialRow),
     settings: settings ? {
       defaultN: settings.default_n,
       defaultTemperature: settings.default_temperature,
@@ -418,31 +422,29 @@ export async function POST(request: Request) {
   catch { return NextResponse.json({ error: "Request body must be JSON" }, { status: 400 }); }
 
   try {
-    const db = await getPlatformDb();
-    await initializePlatform(db);
+    const store = getPlatformStore();
     if (body.action === "save_task") {
       const task = body.task as Record<string, unknown> | undefined;
       if (!task || typeof task.name !== "string" || typeof task.prompt !== "string" || !task.name.trim() || !task.prompt.trim()) {
         return NextResponse.json({ error: "Task name and prompt are required" }, { status: 400 });
       }
       const taskKey = typeof task.taskKey === "string" && task.taskKey ? task.taskKey : task.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-      const latest = await db.prepare("SELECT MAX(version) AS version FROM tasks WHERE task_key = ?").bind(taskKey).first<{ version: number | null }>();
-      const version = (latest?.version ?? 0) + 1;
-      const id = `task-${taskKey}-v${version}-${crypto.randomUUID().slice(0, 6)}`;
-      await db.prepare(`INSERT INTO tasks
-        (id, task_key, name, prompt, tools_json, fixture_json, max_steps, assertions_json, version, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(id, taskKey, task.name.trim(), task.prompt.trim(), JSON.stringify(task.tools ?? []), JSON.stringify(task.fixture ?? {}), Number(task.maxSteps) || 10, JSON.stringify(task.assertions ?? []), version, new Date().toISOString()).run();
+      saveTaskVersion(store, {
+        taskKey,
+        name: task.name.trim(),
+        prompt: task.prompt.trim(),
+        tools: task.tools ?? [],
+        fixture: task.fixture ?? {},
+        maxSteps: Number(task.maxSteps) || 10,
+        assertions: task.assertions ?? [],
+      });
       return NextResponse.json(await snapshot());
     }
 
     if (body.action === "save_settings") {
       const settings = body.settings as Record<string, unknown> | undefined;
       if (!settings) return NextResponse.json({ error: "Settings are required" }, { status: 400 });
-      await db.prepare(`UPDATE workspace_settings SET
-        default_n = ?, default_temperature = ?, budget_warning_cents = ?, retention_days = ?, enabled_models_json = ?, updated_at = ?
-        WHERE id = 'default'`)
-        .bind(Number(settings.defaultN) || 10, Number(settings.defaultTemperature) || 0, Number(settings.budgetWarningCents) || 1000, Number(settings.retentionDays) || 90, JSON.stringify(settings.enabledModels ?? ["OutcomeTrace Reference Agent"]), new Date().toISOString()).run();
+      saveWorkspaceSettings(store, settings);
       return NextResponse.json(await snapshot());
     }
 
@@ -484,16 +486,18 @@ export async function POST(request: Request) {
         const generated = await Promise.all(models.flatMap((model, modelIndex) =>
           Array.from({ length: effectiveTrialCount }, (_, index) => runCustomTrial(custom, runId, modelIndex * 10 + index, model)),
         ));
-        const successCount = generated.filter((trial) => trial.status === "Passed").length;
-        const latencyMs = generated.reduce((sum, trial) => sum + trial.latencyMs, 0);
-        const costMicros = generated.reduce((sum, trial) => sum + trial.costMicros, 0);
-        await db.batch([
-          db.prepare(`INSERT INTO runs
-            (id, name, status, task_ids_json, models_json, prompt_variant, trials_per_cell, temperature, budget_cap_cents, baseline_run_id, total_trials, completed_trials, success_count, cost_micros, latency_ms, created_at, completed_at)
-            VALUES (?, ?, 'completed', ?, ?, 'custom-input-v2', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .bind(runId, custom.name, JSON.stringify(["custom-input"]), JSON.stringify(models), effectiveTrialCount, Number(body.temperature) || 0, Number(body.budgetCapCents) || 1000, body.baselineRunId ? String(body.baselineRunId) : null, generated.length, generated.length, successCount, costMicros, latencyMs, createdAt, createdAt),
-          ...generated.map((trial) => trialInsert(db, trial)),
-        ]);
+        saveCompletedRun(store, {
+          id: runId,
+          name: custom.name,
+          taskIds: ["custom-input"],
+          models,
+          promptVariant: "custom-input-v2",
+          trialsPerCell: effectiveTrialCount,
+          temperature: Number(body.temperature) || 0,
+          budgetCapCents: Number(body.budgetCapCents) || 1000,
+          baselineRunId: body.baselineRunId ? String(body.baselineRunId) : null,
+          createdAt,
+        }, generated);
         return NextResponse.json(await snapshot());
       }
       if (!taskIds.length || !models.length) return NextResponse.json({ error: "Select at least one task and model" }, { status: 400 });
@@ -506,17 +510,16 @@ export async function POST(request: Request) {
       if (missingProvider) {
         const provider = MODEL_PROVIDERS[missingProvider as keyof typeof MODEL_PROVIDERS] as LiveProvider;
         const variable = provider === "openai" ? "OPENAI_API_KEY" : provider === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
-        return NextResponse.json({ error: `Add ${variable} in Site settings before running ${missingProvider}` }, { status: 503 });
+        return NextResponse.json({ error: `Add ${variable} in Vercel project settings before running ${missingProvider}` }, { status: 503 });
       }
-      const placeholders = taskIds.map(() => "?").join(",");
-      const taskRows = await db.prepare(`SELECT * FROM tasks WHERE id IN (${placeholders})`).bind(...taskIds).all<Record<string, unknown>>();
-      if (models.some((model) => model !== "OutcomeTrace Reference Agent") && taskRows.results.some((task) => task.task_key !== "candidate-comparison")) {
+      const taskRows = store.tasks.filter((task) => taskIds.includes(String(task.id)));
+      if (models.some((model) => model !== "OutcomeTrace Reference Agent") && taskRows.some((task) => task.task_key !== "candidate-comparison")) {
         return NextResponse.json({ error: "Live model comparison currently supports the seeded candidate benchmark" }, { status: 400 });
       }
       const effectiveTrialCount = models.some((model) => model !== "OutcomeTrace Reference Agent") ? Math.min(3, trialCount) : trialCount;
       const runId = `RUN-${Date.now().toString().slice(-6)}`;
       const createdAt = new Date().toISOString();
-      const work = taskRows.results.flatMap((task, taskIndex) => models.flatMap((model, modelIndex) =>
+      const work = taskRows.flatMap((task, taskIndex) => models.flatMap((model, modelIndex) =>
         Array.from({ length: effectiveTrialCount }, (_, index) => {
           const trialIndex = taskIndex * 100 + modelIndex * 20 + index + 1;
           return model === "OutcomeTrace Reference Agent"
@@ -525,16 +528,18 @@ export async function POST(request: Request) {
         }),
       ));
       const generated = await Promise.all(work);
-      const successCount = generated.filter((trial) => trial.status === "Passed").length;
-      const latencyMs = generated.reduce((sum, trial) => sum + trial.latencyMs, 0);
-      const costMicros = generated.reduce((sum, trial) => sum + trial.costMicros, 0);
-      await db.batch([
-        db.prepare(`INSERT INTO runs
-          (id, name, status, task_ids_json, models_json, prompt_variant, trials_per_cell, temperature, budget_cap_cents, baseline_run_id, total_trials, completed_trials, success_count, cost_micros, latency_ms, created_at, completed_at)
-          VALUES (?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .bind(runId, typeof body.name === "string" && body.name ? body.name : `Evaluation ${runId}`, JSON.stringify(taskIds), JSON.stringify(models), String(body.promptVariant ?? "candidate-comparison-v1"), effectiveTrialCount, Number(body.temperature) || 0, Number(body.budgetCapCents) || 1000, body.baselineRunId ? String(body.baselineRunId) : null, generated.length, generated.length, successCount, costMicros, latencyMs, createdAt, createdAt),
-        ...generated.map((trial) => trialInsert(db, trial)),
-      ]);
+      saveCompletedRun(store, {
+        id: runId,
+        name: typeof body.name === "string" && body.name ? body.name : `Evaluation ${runId}`,
+        taskIds,
+        models,
+        promptVariant: String(body.promptVariant ?? "candidate-comparison-v1"),
+        trialsPerCell: effectiveTrialCount,
+        temperature: Number(body.temperature) || 0,
+        budgetCapCents: Number(body.budgetCapCents) || 1000,
+        baselineRunId: body.baselineRunId ? String(body.baselineRunId) : null,
+        createdAt,
+      }, generated);
       return NextResponse.json(await snapshot());
     }
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 type Order = { id: string; amount_cents: number; status: string };
 type Refund = { order_id: string; amount_cents: number; reason: string };
@@ -226,7 +226,7 @@ export async function POST(request: Request) {
   const { apiKey, model } = runtimeConfig();
   if (!apiKey) {
     return NextResponse.json(
-      { error: "Live Claude is not configured. Add ANTHROPIC_API_KEY to the Site environment." },
+      { error: "Live Claude is not configured. Add ANTHROPIC_API_KEY to the Vercel environment." },
       { status: 503, headers: { "cache-control": "no-store" } },
     );
   }

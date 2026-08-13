@@ -11,13 +11,13 @@ signal used to explain failures, unsafe shortcuts, and tool misuse.
 - Candidate-review task setup with a job description and three resume uploads
 - Built-in deterministic agent plus Claude, GPT, and Gemini model options
 - Repeated trials with success, hallucination, cost, and latency metrics
-- Persisted task, run, and trial records in Cloudflare D1
+- Seeded task, run, and trial records in a Vercel-safe demo store
 - Failure categories and a step-by-step trace viewer
 - Baseline-versus-candidate regression comparison
 
 ## Local development
 
-Requirements: Node.js `>=22.13.0`, Linux, `flock`, `curl`, and GNU `timeout`.
+Requirements: Node.js `>=20` and npm.
 
 ```bash
 npm ci
@@ -29,11 +29,9 @@ Useful checks:
 ```bash
 npm run lint
 npm run build
-node --test tests/rendered-html.test.mjs
 ```
 
-The UI lives in `app/`, API routes are under `app/api/`, and D1 schema/migrations live in
-`db/` and `drizzle/`.
+The UI lives in `app/`, API routes are under `app/api/`, and the demo store lives in `db/`.
 
 ## Provider configuration
 
@@ -42,7 +40,8 @@ credentials in the deployment environment. Keys are server-side only; do not com
 
 ## Deployment
 
-The production site is hosted with OpenAI Sites using the configuration in
-`.openai/hosting.json`.
+The production site is hosted on Vercel as a native Next.js application. Set the Vercel
+project root directory to `web` when importing this repository.
 
-[Open the live website](https://outcome-trace-dashboard.raam-nandha.chatgpt.site)
+The built-in reference agent works without credentials. The demo store can reset when a
+serverless instance restarts; connect a managed database before using it for durable records.
