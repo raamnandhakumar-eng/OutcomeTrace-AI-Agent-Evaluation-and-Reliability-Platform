@@ -1,4 +1,26 @@
-type D1 = D1Database;
+export type PlatformStore = {
+  tasks: Record<string, unknown>[];
+  runs: Record<string, unknown>[];
+  trials: Record<string, unknown>[];
+  settings: Record<string, unknown>;
+};
+
+type CompletedRun = {
+  id: string;
+  name: string;
+  taskIds: string[];
+  models: string[];
+  promptVariant: string;
+  trialsPerCell: number;
+  temperature: number;
+  budgetCapCents: number;
+  baselineRunId: string | null;
+  createdAt: string;
+};
+
+const platformGlobal = globalThis as typeof globalThis & {
+  outcomeTracePlatformStore?: PlatformStore;
+};
 
 const defaultTasks = [
   {
@@ -57,102 +79,9 @@ const defaultTasks = [
   },
 ];
 
-export async function getPlatformDb(): Promise<D1> {
-  const { env } = await import("cloudflare:workers");
-  if (!env.DB) throw new Error("D1 binding DB is unavailable");
-  return env.DB;
-}
-
-export async function initializePlatform(db: D1) {
-  await db.batch([
-    db.prepare(`CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      task_key TEXT NOT NULL,
-      name TEXT NOT NULL,
-      prompt TEXT NOT NULL,
-      tools_json TEXT NOT NULL,
-      fixture_json TEXT NOT NULL,
-      max_steps INTEGER NOT NULL,
-      assertions_json TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      created_at TEXT NOT NULL
-    )`),
-    db.prepare("CREATE INDEX IF NOT EXISTS tasks_key_version_idx ON tasks (task_key, version)"),
-    db.prepare(`CREATE TABLE IF NOT EXISTS runs (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      status TEXT NOT NULL,
-      task_ids_json TEXT NOT NULL,
-      models_json TEXT NOT NULL,
-      prompt_variant TEXT NOT NULL,
-      trials_per_cell INTEGER NOT NULL,
-      temperature REAL NOT NULL,
-      budget_cap_cents INTEGER NOT NULL,
-      baseline_run_id TEXT,
-      total_trials INTEGER NOT NULL,
-      completed_trials INTEGER NOT NULL,
-      success_count INTEGER NOT NULL,
-      cost_micros INTEGER NOT NULL,
-      latency_ms INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      completed_at TEXT
-    )`),
-    db.prepare("CREATE INDEX IF NOT EXISTS runs_created_at_idx ON runs (created_at)"),
-    db.prepare(`CREATE TABLE IF NOT EXISTS trials (
-      id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL,
-      task_id TEXT NOT NULL,
-      task_name TEXT NOT NULL,
-      model TEXT NOT NULL,
-      status TEXT NOT NULL,
-      category TEXT NOT NULL,
-      steps INTEGER NOT NULL,
-      input_tokens INTEGER NOT NULL,
-      output_tokens INTEGER NOT NULL,
-      cost_micros INTEGER NOT NULL,
-      latency_ms INTEGER NOT NULL,
-      trace_json TEXT NOT NULL,
-      before_state_json TEXT NOT NULL,
-      after_state_json TEXT NOT NULL,
-      checks_json TEXT NOT NULL,
-      final_message TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    )`),
-    db.prepare("CREATE INDEX IF NOT EXISTS trials_run_id_idx ON trials (run_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS trials_status_idx ON trials (status)"),
-    db.prepare(`CREATE TABLE IF NOT EXISTS workspace_settings (
-      id TEXT PRIMARY KEY,
-      default_n INTEGER NOT NULL,
-      default_temperature REAL NOT NULL,
-      budget_warning_cents INTEGER NOT NULL,
-      retention_days INTEGER NOT NULL,
-      enabled_models_json TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`),
-  ]);
-
-  const existingTasks = await db.prepare("SELECT task_key FROM tasks").all<{ task_key: string }>();
-  const existingTaskKeys = new Set(existingTasks.results.map((task) => task.task_key));
-  const missingTasks = defaultTasks.filter((task) => !existingTaskKeys.has(task.taskKey));
-  if (missingTasks.length) {
-    const now = new Date().toISOString();
-    await db.batch(missingTasks.map((task) => db.prepare(`INSERT INTO tasks
-      (id, task_key, name, prompt, tools_json, fixture_json, max_steps, assertions_json, version, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`)
-      .bind(task.id, task.taskKey, task.name, task.prompt, JSON.stringify(task.tools), JSON.stringify(task.fixture), task.maxSteps, JSON.stringify(task.assertions), now)));
-  }
-
-  const settings = await db.prepare("SELECT id FROM workspace_settings WHERE id = 'default'").first();
-  if (!settings) {
-    await db.prepare(`INSERT INTO workspace_settings
-      (id, default_n, default_temperature, budget_warning_cents, retention_days, enabled_models_json, updated_at)
-      VALUES ('default', 10, 0, 1000, 90, ?, ?)`)
-      .bind(JSON.stringify(["OutcomeTrace Reference Agent"]), new Date().toISOString()).run();
-  }
-
-  const runCount = await db.prepare("SELECT COUNT(*) AS count FROM runs").first<{ count: number }>();
-  if (!runCount?.count) await seedInitialRun(db);
-  await seedCandidateRun(db);
+export function getPlatformStore(): PlatformStore {
+  platformGlobal.outcomeTracePlatformStore ??= createPlatformStore();
+  return platformGlobal.outcomeTracePlatformStore;
 }
 
 function simulatedOutcome(index: number) {
@@ -279,50 +208,166 @@ export function buildReferenceTrial(task: Record<string, unknown>, runId: string
   };
 }
 
-async function seedInitialRun(db: D1) {
-  const tasks = await db.prepare("SELECT * FROM tasks ORDER BY name").all<Record<string, unknown>>();
-  const runId = "RUN-001";
+function taskStorageRow(task: (typeof defaultTasks)[number], createdAt: string) {
+  return {
+    id: task.id,
+    task_key: task.taskKey,
+    name: task.name,
+    prompt: task.prompt,
+    tools_json: JSON.stringify(task.tools),
+    fixture_json: JSON.stringify(task.fixture),
+    max_steps: task.maxSteps,
+    assertions_json: JSON.stringify(task.assertions),
+    version: 1,
+    created_at: createdAt,
+  } satisfies Record<string, unknown>;
+}
+
+function trialStorageRow(trialValue: unknown) {
+  const trial = trialValue as Record<string, unknown>;
+  return {
+    id: trial.id,
+    run_id: trial.runId,
+    task_id: trial.taskId,
+    task_name: trial.taskName,
+    model: trial.model,
+    status: trial.status,
+    category: trial.category,
+    steps: trial.steps,
+    input_tokens: trial.inputTokens,
+    output_tokens: trial.outputTokens,
+    cost_micros: trial.costMicros,
+    latency_ms: trial.latencyMs,
+    trace_json: JSON.stringify(trial.trace),
+    before_state_json: JSON.stringify(trial.beforeState),
+    after_state_json: JSON.stringify(trial.afterState),
+    checks_json: JSON.stringify(trial.checks),
+    final_message: trial.finalMessage,
+    created_at: trial.createdAt,
+  } satisfies Record<string, unknown>;
+}
+
+function runStorageRow(run: CompletedRun, trials: unknown[]) {
+  const rows = trials as Array<Record<string, unknown>>;
+  return {
+    id: run.id,
+    name: run.name,
+    status: "completed",
+    task_ids_json: JSON.stringify(run.taskIds),
+    models_json: JSON.stringify(run.models),
+    prompt_variant: run.promptVariant,
+    trials_per_cell: run.trialsPerCell,
+    temperature: run.temperature,
+    budget_cap_cents: run.budgetCapCents,
+    baseline_run_id: run.baselineRunId,
+    total_trials: rows.length,
+    completed_trials: rows.length,
+    success_count: rows.filter((trial) => trial.status === "Passed").length,
+    cost_micros: rows.reduce((sum, trial) => sum + Number(trial.costMicros ?? 0), 0),
+    latency_ms: rows.reduce((sum, trial) => sum + Number(trial.latencyMs ?? 0), 0),
+    created_at: run.createdAt,
+    completed_at: run.createdAt,
+  } satisfies Record<string, unknown>;
+}
+
+function createPlatformStore(): PlatformStore {
+  const createdAt = "2026-08-02T22:20:27.291Z";
+  const tasks = defaultTasks.map((task) => taskStorageRow(task, createdAt));
   const model = "OutcomeTrace Reference Agent";
-  const generated = tasks.results.flatMap((task, taskIndex) =>
-    Array.from({ length: 5 }, (_, index) => buildReferenceTrial(task, runId, taskIndex * 5 + index + 1, model)),
+  const initialTrials = tasks.flatMap((task, taskIndex) =>
+    Array.from({ length: 5 }, (_, index) => buildReferenceTrial(task, "RUN-001", taskIndex * 5 + index + 1, model)),
   );
-  const now = new Date().toISOString();
-  const successCount = generated.filter((trial) => trial.status === "Passed").length;
-  const latencyMs = generated.reduce((sum, trial) => sum + trial.latencyMs, 0);
-  await db.batch([
-    db.prepare(`INSERT INTO runs
-      (id, name, status, task_ids_json, models_json, prompt_variant, trials_per_cell, temperature, budget_cap_cents, baseline_run_id, total_trials, completed_trials, success_count, cost_micros, latency_ms, created_at, completed_at)
-      VALUES (?, ?, 'completed', ?, ?, 'reference-v1', 5, 0, 1000, NULL, ?, ?, ?, 0, ?, ?, ?)`)
-      .bind(runId, "Reference agent smoke test", JSON.stringify(tasks.results.map((task) => task.id)), JSON.stringify([model]), generated.length, generated.length, successCount, latencyMs, now, now),
-    ...generated.map((trial) => trialInsert(db, trial)),
-  ]);
+  const candidateTask = tasks.find((task) => task.task_key === "candidate-comparison")!;
+  const candidateTrials = Array.from(
+    { length: 12 },
+    (_, index) => buildReferenceTrial(candidateTask, "RUN-CANDIDATE-DEMO", index + 1, model),
+  );
+  const initialRun: CompletedRun = {
+    id: "RUN-001",
+    name: "Reference agent smoke test",
+    taskIds: tasks.map((task) => String(task.id)),
+    models: [model],
+    promptVariant: "reference-v1",
+    trialsPerCell: 5,
+    temperature: 0,
+    budgetCapCents: 1000,
+    baselineRunId: null,
+    createdAt,
+  };
+  const candidateRun: CompletedRun = {
+    id: "RUN-CANDIDATE-DEMO",
+    name: "Candidate ranking benchmark",
+    taskIds: [String(candidateTask.id)],
+    models: [model],
+    promptVariant: "candidate-ranking-v1",
+    trialsPerCell: 12,
+    temperature: 0,
+    budgetCapCents: 1000,
+    baselineRunId: null,
+    createdAt: "2026-08-03T01:44:29.245Z",
+  };
+  return {
+    tasks,
+    runs: [runStorageRow(candidateRun, candidateTrials), runStorageRow(initialRun, initialTrials)],
+    trials: [...initialTrials, ...candidateTrials].map(trialStorageRow),
+    settings: {
+      id: "default",
+      default_n: 10,
+      default_temperature: 0,
+      budget_warning_cents: 1000,
+      retention_days: 90,
+      enabled_models_json: JSON.stringify([model]),
+      updated_at: createdAt,
+    },
+  };
 }
 
-async function seedCandidateRun(db: D1) {
-  const existing = await db.prepare("SELECT id FROM runs WHERE id = 'RUN-CANDIDATE-DEMO'").first();
-  if (existing) return;
-  const task = await db.prepare("SELECT * FROM tasks WHERE task_key = 'candidate-comparison' ORDER BY version DESC LIMIT 1").first<Record<string, unknown>>();
-  if (!task) return;
-  const runId = "RUN-CANDIDATE-DEMO";
-  const model = "OutcomeTrace Reference Agent";
-  const generated = Array.from({ length: 12 }, (_, index) => buildReferenceTrial(task, runId, index + 1, model));
-  const now = new Date().toISOString();
-  const successCount = generated.filter((trial) => trial.status === "Passed").length;
-  const latencyMs = generated.reduce((sum, trial) => sum + trial.latencyMs, 0);
-  await db.batch([
-    db.prepare(`INSERT INTO runs
-      (id, name, status, task_ids_json, models_json, prompt_variant, trials_per_cell, temperature, budget_cap_cents, baseline_run_id, total_trials, completed_trials, success_count, cost_micros, latency_ms, created_at, completed_at)
-      VALUES (?, ?, 'completed', ?, ?, 'candidate-ranking-v1', 12, 0, 1000, NULL, ?, ?, ?, 0, ?, ?, ?)`)
-      .bind(runId, "Candidate ranking benchmark", JSON.stringify([String(task.id)]), JSON.stringify([model]), generated.length, generated.length, successCount, latencyMs, now, now),
-    ...generated.map((trial) => trialInsert(db, trial)),
-  ]);
+export function latestTaskRows(store: PlatformStore) {
+  const latest = new Map<string, Record<string, unknown>>();
+  for (const task of store.tasks) {
+    const key = String(task.task_key);
+    if (!latest.has(key) || Number(task.version) > Number(latest.get(key)?.version)) latest.set(key, task);
+  }
+  return [...latest.values()].sort((left, right) => String(left.name).localeCompare(String(right.name)));
 }
 
-export function trialInsert(db: D1, trial: ReturnType<typeof buildReferenceTrial>) {
-  return db.prepare(`INSERT INTO trials
-    (id, run_id, task_id, task_name, model, status, category, steps, input_tokens, output_tokens, cost_micros, latency_ms, trace_json, before_state_json, after_state_json, checks_json, final_message, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(trial.id, trial.runId, trial.taskId, trial.taskName, trial.model, trial.status, trial.category, trial.steps, trial.inputTokens, trial.outputTokens, trial.costMicros, trial.latencyMs, JSON.stringify(trial.trace), JSON.stringify(trial.beforeState), JSON.stringify(trial.afterState), JSON.stringify(trial.checks), trial.finalMessage, trial.createdAt);
+export function saveTaskVersion(
+  store: PlatformStore,
+  task: { name: string; prompt: string; taskKey: string; tools: unknown; fixture: unknown; maxSteps: number; assertions: unknown },
+) {
+  const version = Math.max(
+    0,
+    ...store.tasks.filter((row) => row.task_key === task.taskKey).map((row) => Number(row.version)),
+  ) + 1;
+  store.tasks.push({
+    id: `task-${task.taskKey}-v${version}-${crypto.randomUUID().slice(0, 6)}`,
+    task_key: task.taskKey,
+    name: task.name,
+    prompt: task.prompt,
+    tools_json: JSON.stringify(task.tools),
+    fixture_json: JSON.stringify(task.fixture),
+    max_steps: task.maxSteps,
+    assertions_json: JSON.stringify(task.assertions),
+    version,
+    created_at: new Date().toISOString(),
+  });
+}
+
+export function saveWorkspaceSettings(store: PlatformStore, settings: Record<string, unknown>) {
+  store.settings = {
+    id: "default",
+    default_n: Number(settings.defaultN) || 10,
+    default_temperature: Number(settings.defaultTemperature) || 0,
+    budget_warning_cents: Number(settings.budgetWarningCents) || 1000,
+    retention_days: Number(settings.retentionDays) || 90,
+    enabled_models_json: JSON.stringify(settings.enabledModels ?? ["OutcomeTrace Reference Agent"]),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export function saveCompletedRun(store: PlatformStore, run: CompletedRun, trials: unknown[]) {
+  store.runs.unshift(runStorageRow(run, trials));
+  store.trials.push(...trials.map(trialStorageRow));
 }
 
 export function parseJson<T>(value: unknown, fallback: T): T {

@@ -65,8 +65,8 @@ Exact provider model IDs can be overridden with `ANTHROPIC_MODEL`, `OPENAI_MODEL
 
 ### 3. Run repeated trials
 
-Configure the number of trials, budget warning, and optional baseline. The platform records
-every result in persistent storage instead of relying on a single model response.
+Configure the number of trials, budget warning, and optional baseline. The public demo keeps
+results for the active server instance instead of relying on a single model response.
 
 ### 4. Score the actual result
 
@@ -125,17 +125,17 @@ flowchart TD
     UI["Next.js evaluation UI"] --> API["Run and platform APIs"]
     API --> MODELS["Reference, Claude, GPT, Gemini"]
     API --> SCORER["Outcome and trace scorers"]
-    SCORER --> DB["Cloudflare D1"]
-    DB --> UI
+    SCORER --> STORE["Vercel demo store"]
+    STORE --> UI
 ```
 
 | Layer | Technology | Responsibility |
 |---|---|---|
 | Interface | Next.js 16, React 19, TypeScript | Run configuration, results, traces, and settings |
-| Runtime | Vinext, Vite, Cloudflare Worker | Full-stack edge deployment |
-| Persistence | Cloudflare D1, Drizzle ORM | Tasks, runs, trials, settings, and comparisons |
+| Runtime | Next.js and Vercel Functions | Full-stack Vercel deployment |
+| Demo state | Seeded in-memory store | Tasks, runs, trials, settings, and comparisons for the active instance |
 | Evaluation | TypeScript API routes and Python harness | Model execution, outcome checks, trace checks, metrics |
-| Quality | ESLint, Node tests, Pytest, Ruff | Website and evaluation-engine validation |
+| Quality | ESLint, Next.js build, Pytest, Ruff | Website and evaluation-engine validation |
 
 ## Repository structure
 
@@ -143,10 +143,7 @@ flowchart TD
 .
 ├── web/                       # Working full-stack website
 │   ├── app/                   # UI and API routes
-│   ├── db/                    # D1 queries and platform logic
-│   ├── drizzle/               # Database migrations
-│   ├── tests/                 # Website artifact tests
-│   └── worker/                # Cloudflare Worker entry point
+│   └── db/                    # Demo store and platform logic
 ├── src/outcometrace/          # Reusable Python evaluation harness
 ├── tests/                     # Python outcome and statistics tests
 └── .github/workflows/         # Python and website CI
@@ -156,13 +153,12 @@ flowchart TD
 
 Requirements:
 
-- Node.js `>=22.13.0`
+- Node.js `>=20`
 - npm
-- Linux tooling used by the bounded build scripts (`flock`, `curl`, and GNU `timeout`)
 
 ```bash
 cd web
-npm run install:ci
+npm ci
 npm run dev
 ```
 
