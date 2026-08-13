@@ -4,7 +4,7 @@
 
 **Project status:** Active development
 
-[Open the working website](https://outcome-trace-dashboard.raam-nandha.chatgpt.site)
+[Open the working website](https://outcometrace-ai-agent-evaluation.vercel.app/)
 
 AI agents can produce confident answers that are incomplete, unsupported, or completely
 disconnected from the work they were supposed to perform. This platform runs agents against
